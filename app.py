@@ -59,7 +59,7 @@ def _new_question():
 
 
 def _new_prompt():
-    return {'text': '', 'requirements': '', 'writing_lines': 22}
+    return {'text': '', 'requirements': '', 'writing_lines': 22, 'sample_essay': ''}
 
 
 def _generate_hint(articles, question_text):
@@ -129,6 +129,7 @@ def render_article_question_tabs(lec_i, lec):
                         '文章正文（每段一行）',
                         value=art.get('body', ''), height=200,
                         key=f'art_b_{lec_i}_{sec_i}_{art_i}')
+                    st.caption('格式：`__文字__` → 下划线　｜　独立行 `---` → 横线')
                     art_img = st.file_uploader(
                         '文章配图（可选）', type=['png', 'jpg', 'jpeg'],
                         key=f'art_img_{lec_i}_{sec_i}_{art_i}')
@@ -162,6 +163,7 @@ def render_article_question_tabs(lec_i, lec):
                             f'第 {q_i+1} 题题目',
                             value=q.get('text', ''), height=80,
                             key=f'qtxt_{lec_i}_{sec_i}_{q_i}')
+                        st.caption('`__文字__` → 下划线')
                     with qc3:
                         q['answer_lines'] = st.number_input(
                             '答题行数', min_value=1, max_value=20,
@@ -291,6 +293,7 @@ def render_writing_tabs(lec_i, lec):
                     prompt['text'] = st.text_area(
                         '写作题目', value=prompt.get('text', ''),
                         height=80, key=f'prompt_{lec_i}_{sec_i}_{p_i}')
+                    st.caption('格式：`__文字__` → 下划线　｜　独立行 `---` → 横线')
                     prompt['requirements'] = st.text_area(
                         '写作要求（可选）', value=prompt.get('requirements', ''),
                         height=60, key=f'req_{lec_i}_{sec_i}_{p_i}')
@@ -298,6 +301,12 @@ def render_writing_tabs(lec_i, lec):
                         '空白书写行数', 10, 40,
                         prompt.get('writing_lines', 22),
                         key=f'wlines_{lec_i}_{sec_i}_{p_i}')
+                    prompt['sample_essay'] = st.text_area(
+                        '参考范文（将汇总排在文档末尾，可留空）',
+                        value=prompt.get('sample_essay', ''),
+                        height=150,
+                        key=f'essay_{lec_i}_{sec_i}_{p_i}')
+                    st.caption('格式：`__文字__` → 下划线　｜　独立行 `---` → 横线')
 
                     if len(sec['prompts']) > 1:
                         if st.button('🗑 删除题目',
