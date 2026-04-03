@@ -39,12 +39,18 @@ def _new_lecture(number):
     }
 
 
-def _new_section(name):
+def _new_question_group(with_article=True):
+    return {
+        'articles': [_new_article()] if with_article else [],
+        'questions': [_new_question()],
+    }
+
+
+def _new_section(name, with_article=True):
     return {
         'name':            name,
         'time_suggestion': '',
-        'articles':        [_new_article()],
-        'questions':       [_new_question()],
+        'question_groups': [_new_question_group(with_article)],
         'prompts':         [_new_prompt()],
     }
 
@@ -92,8 +98,114 @@ def _new_word():
 # UI 渲染函数（先定义，后调用）
 # ══════════════════════════════════════════════════════════════
 
-def render_article_question_tabs(lec_i, lec):
-    """渲染阅读类板块（文章 + 题目）"""
+def _render_question(lec_i, sec_i, grp_i, q_i, q, grp, global_q_num):
+    """渲染单道题目（含表格、图片、提示、答案）。"""
+    with st.container(border=True):
+        qc1, qc2, qc3 = st.columns([1, 3, 1])
+        with qc1:
+            q['type'] = st.selectbox(
+                '题型', ['核心题', '热搜题', '新趋势'],
+                index=['核心题', '热搜题', '新趋势'].index(q.get('type', '核心题')),
+                key=f'qt_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+        with qc2:
+            q['text'] = st.text_area(
+                f'第 {global_q_num} 题题目',
+                value=q.get('text', ''), height=80,
+                key=f'qtxt_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+            st.caption('`__文字__` → 下划线')
+        with qc3:
+            q['answer_lines'] = st.number_input(
+                '答题行数', min_value=1, max_value=20,
+                value=q.get('answer_lines', 4),
+                key=f'qlines_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+
+        # ── 表格编辑器 ──
+        use_table = st.checkbox(
+            '插入表格', value=q.get('table') is not None,
+            key=f'use_table_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+        if use_table:
+            if q.get('table') is None:
+                q['table'] = {'has_header': True, 'data': [['', ''], ['', '']]}
+            td = q['table']
+            tc1, tc2, tc3 = st.columns([1, 1, 3])
+            with tc1:
+                new_rows = int(st.number_input(
+                    '行数', min_value=1, max_value=10,
+                    value=max(1, len(td['data'])),
+                    key=f'trows_{lec_i}_{sec_i}_{grp_i}_{q_i}'))
+            with tc2:
+                cur_cols = len(td['data'][0]) if td['data'] else 2
+                new_cols = int(st.number_input(
+                    '列数', min_value=1, max_value=8,
+                    value=max(1, cur_cols),
+                    key=f'tcols_{lec_i}_{sec_i}_{grp_i}_{q_i}'))
+            with tc3:
+                td['has_header'] = st.checkbox(
+                    '首行为表头', value=td.get('has_header', True),
+                    key=f'thead_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+            while len(td['data']) < new_rows:
+                td['data'].append([''] * (len(td['data'][0]) if td['data'] else new_cols))
+            td['data'] = td['data'][:new_rows]
+            for row in td['data']:
+                while len(row) < new_cols: row.append('')
+                del row[new_cols:]
+            for r_i, row in enumerate(td['data']):
+                is_hdr = td.get('has_header') and r_i == 0
+                cell_cols = st.columns(len(row))
+                for c_i, cell_val in enumerate(row):
+                    with cell_cols[c_i]:
+                        td['data'][r_i][c_i] = st.text_input(
+                            f'{"表头" if is_hdr else "内容"}({r_i+1},{c_i+1})',
+                            value=cell_val,
+                            key=f'tcell_{lec_i}_{sec_i}_{grp_i}_{q_i}_{r_i}_{c_i}',
+                            label_visibility='collapsed')
+        else:
+            q['table'] = None
+
+        q_img = st.file_uploader(
+            '题目配图（可选）', type=['png', 'jpg', 'jpeg'],
+            key=f'qimg_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+        q['image'] = q_img.read() if q_img else None
+
+        q['linked_material'] = st.text_area(
+            '链接材料（可留空）', value=q.get('linked_material', ''),
+            height=60, key=f'qlink_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+
+        hint_col, btn_col = st.columns([5, 1])
+        with hint_col:
+            q['hint'] = st.text_area(
+                '答题提示（AI 自动生成）',
+                value=q.get('hint', ''), height=68,
+                key=f'qhint_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+        with btn_col:
+            st.markdown('<div style="margin-top:28px"></div>', unsafe_allow_html=True)
+            if st.button('✨ 生成', key=f'gen_hint_{lec_i}_{sec_i}_{grp_i}_{q_i}'):
+                _err = None
+                with st.spinner('生成中…'):
+                    try:
+                        generated = _generate_hint(grp.get('articles', []), q.get('text', ''))
+                        q['hint'] = generated
+                        st.session_state[f'qhint_{lec_i}_{sec_i}_{grp_i}_{q_i}'] = generated
+                    except Exception as e:
+                        _err = e
+                if _err:
+                    st.error(f'生成失败：{_err}')
+                else:
+                    st.rerun()
+
+        q['answer'] = st.text_area(
+            '参考答案（将汇总排在文档末尾）',
+            value=q.get('answer', ''), height=68,
+            key=f'qans_{lec_i}_{sec_i}_{grp_i}_{q_i}')
+
+        if len(grp['questions']) > 1:
+            if st.button('🗑 删除此题', key=f'del_q_{lec_i}_{sec_i}_{grp_i}_{q_i}'):
+                grp['questions'].pop(q_i)
+                st.rerun()
+
+
+def render_article_question_tabs(lec_i, lec, default_with_article=True):
+    """渲染阅读类板块（支持多个大题，每大题含可选材料 + 多道题目）"""
     section_tabs = st.tabs([f"📖 {sec['name']}" for sec in lec['sections'][:2]])
     for sec_i, (tab, sec) in enumerate(zip(section_tabs, lec['sections'][:2])):
         with tab:
@@ -106,170 +218,83 @@ def render_article_question_tabs(lec_i, lec):
                     '建议用时', value=sec.get('time_suggestion', ''),
                     placeholder='如：15分钟', key=f's_time_{lec_i}_{sec_i}')
 
-            # ── 文章 ──
-            st.markdown('##### 阅读文章')
-            for art_i, art in enumerate(sec.get('articles', [])):
-                with st.container(border=True):
-                    ac1, ac2, ac3 = st.columns([2, 1, 1])
-                    with ac1:
-                        art['title'] = st.text_input(
-                            '文章标题', value=art.get('title', ''),
-                            key=f'art_t_{lec_i}_{sec_i}_{art_i}')
-                    with ac2:
-                        art['author'] = st.text_input(
-                            '作者', value=art.get('author', ''),
-                            placeholder='如：鲁迅',
-                            key=f'art_a_{lec_i}_{sec_i}_{art_i}')
-                    with ac3:
-                        art['source'] = st.text_input(
-                            '出处', value=art.get('source', ''),
-                            placeholder='（选自《...》，有删改）',
-                            key=f'art_s_{lec_i}_{sec_i}_{art_i}')
-                    art['body'] = st.text_area(
-                        '文章正文（每段一行）',
-                        value=art.get('body', ''), height=200,
-                        key=f'art_b_{lec_i}_{sec_i}_{art_i}')
-                    st.caption('格式：`__文字__` → 下划线　｜　独立行 `---` → 横线')
-                    art_img = st.file_uploader(
-                        '文章配图（可选）', type=['png', 'jpg', 'jpeg'],
-                        key=f'art_img_{lec_i}_{sec_i}_{art_i}')
-                    art['image'] = art_img.read() if art_img else None
+            # 兼容旧数据结构（articles/questions 直接在 sec 上）
+            if 'question_groups' not in sec:
+                sec['question_groups'] = [{'articles': sec.pop('articles', []),
+                                           'questions': sec.pop('questions', [])}]
+            groups = sec['question_groups']
 
-                    if len(sec['articles']) > 1:
-                        if st.button('🗑 删除文章',
-                                     key=f'del_art_{lec_i}_{sec_i}_{art_i}'):
-                            sec['articles'].pop(art_i)
+            for grp_i, grp in enumerate(groups):
+                with st.container(border=True):
+                    st.markdown(f'**第 {grp_i + 1} 大题**')
+
+                    # ── 阅读材料 ──
+                    has_art = st.checkbox(
+                        '含阅读材料',
+                        value=len(grp.get('articles', [])) > 0,
+                        key=f'has_art_{lec_i}_{sec_i}_{grp_i}')
+                    if has_art:
+                        if not grp.get('articles'):
+                            grp['articles'] = [_new_article()]
+                        st.markdown('##### 阅读材料')
+                        for art_i, art in enumerate(grp['articles']):
+                            with st.container(border=True):
+                                ac1, ac2, ac3 = st.columns([2, 1, 1])
+                                with ac1:
+                                    art['title'] = st.text_input(
+                                        '文章标题', value=art.get('title', ''),
+                                        key=f'art_t_{lec_i}_{sec_i}_{grp_i}_{art_i}')
+                                with ac2:
+                                    art['author'] = st.text_input(
+                                        '作者', value=art.get('author', ''),
+                                        placeholder='如：鲁迅',
+                                        key=f'art_a_{lec_i}_{sec_i}_{grp_i}_{art_i}')
+                                with ac3:
+                                    art['source'] = st.text_input(
+                                        '出处', value=art.get('source', ''),
+                                        placeholder='（选自《...》，有删改）',
+                                        key=f'art_s_{lec_i}_{sec_i}_{grp_i}_{art_i}')
+                                art['body'] = st.text_area(
+                                    '文章正文（每段一行）',
+                                    value=art.get('body', ''), height=200,
+                                    key=f'art_b_{lec_i}_{sec_i}_{grp_i}_{art_i}')
+                                st.caption('格式：`__文字__` → 下划线　｜　独立行 `---` → 横线')
+                                art_img = st.file_uploader(
+                                    '文章配图（可选）', type=['png', 'jpg', 'jpeg'],
+                                    key=f'art_img_{lec_i}_{sec_i}_{grp_i}_{art_i}')
+                                art['image'] = art_img.read() if art_img else None
+                                if len(grp['articles']) > 1:
+                                    if st.button('🗑 删除文章',
+                                                 key=f'del_art_{lec_i}_{sec_i}_{grp_i}_{art_i}'):
+                                        grp['articles'].pop(art_i)
+                                        st.rerun()
+                        if st.button('➕ 添加文章', key=f'add_art_{lec_i}_{sec_i}_{grp_i}'):
+                            grp['articles'].append(_new_article())
                             st.rerun()
-
-            if st.button('➕ 添加文章', key=f'add_art_{lec_i}_{sec_i}'):
-                sec['articles'].append(_new_article())
-                st.rerun()
-
-            st.markdown('---')
-
-            # ── 题目 ──
-            st.markdown('##### 练习题目')
-            for q_i, q in enumerate(sec.get('questions', [])):
-                with st.container(border=True):
-                    qc1, qc2, qc3 = st.columns([1, 3, 1])
-                    with qc1:
-                        q['type'] = st.selectbox(
-                            '题型', ['核心题', '热搜题', '新趋势'],
-                            index=['核心题', '热搜题', '新趋势'].index(
-                                q.get('type', '核心题')),
-                            key=f'qt_{lec_i}_{sec_i}_{q_i}')
-                    with qc2:
-                        q['text'] = st.text_area(
-                            f'第 {q_i+1} 题题目',
-                            value=q.get('text', ''), height=80,
-                            key=f'qtxt_{lec_i}_{sec_i}_{q_i}')
-                        st.caption('`__文字__` → 下划线')
-                    with qc3:
-                        q['answer_lines'] = st.number_input(
-                            '答题行数', min_value=1, max_value=20,
-                            value=q.get('answer_lines', 4),
-                            key=f'qlines_{lec_i}_{sec_i}_{q_i}')
-
-                    # ── 表格编辑器 ──
-                    use_table = st.checkbox(
-                        '插入表格', value=q.get('table') is not None,
-                        key=f'use_table_{lec_i}_{sec_i}_{q_i}')
-                    if use_table:
-                        if q.get('table') is None:
-                            q['table'] = {'has_header': True,
-                                          'data': [['', ''], ['', '']]}
-                        td = q['table']
-                        tc1, tc2, tc3 = st.columns([1, 1, 3])
-                        with tc1:
-                            new_rows = int(st.number_input(
-                                '行数', min_value=1, max_value=10,
-                                value=max(1, len(td['data'])),
-                                key=f'trows_{lec_i}_{sec_i}_{q_i}'))
-                        with tc2:
-                            cur_cols = len(td['data'][0]) if td['data'] else 2
-                            new_cols = int(st.number_input(
-                                '列数', min_value=1, max_value=8,
-                                value=max(1, cur_cols),
-                                key=f'tcols_{lec_i}_{sec_i}_{q_i}'))
-                        with tc3:
-                            td['has_header'] = st.checkbox(
-                                '首行为表头', value=td.get('has_header', True),
-                                key=f'thead_{lec_i}_{sec_i}_{q_i}')
-                        # 自动调整行列数
-                        while len(td['data']) < new_rows:
-                            td['data'].append(
-                                [''] * (len(td['data'][0]) if td['data'] else new_cols))
-                        td['data'] = td['data'][:new_rows]
-                        for row in td['data']:
-                            while len(row) < new_cols:
-                                row.append('')
-                            del row[new_cols:]
-                        # 单元格输入网格
-                        for r_i, row in enumerate(td['data']):
-                            is_hdr = td.get('has_header') and r_i == 0
-                            cell_cols = st.columns(len(row))
-                            for c_i, cell_val in enumerate(row):
-                                with cell_cols[c_i]:
-                                    td['data'][r_i][c_i] = st.text_input(
-                                        f'{"表头" if is_hdr else "内容"}({r_i+1},{c_i+1})',
-                                        value=cell_val,
-                                        key=f'tcell_{lec_i}_{sec_i}_{q_i}_{r_i}_{c_i}',
-                                        label_visibility='collapsed')
+                        st.markdown('---')
                     else:
-                        q['table'] = None
+                        grp['articles'] = []
 
-                    # ── 题目配图 ──
-                    q_img = st.file_uploader(
-                        '题目配图（可选）', type=['png', 'jpg', 'jpeg'],
-                        key=f'qimg_{lec_i}_{sec_i}_{q_i}')
-                    q['image'] = q_img.read() if q_img else None
+                    # ── 题目 ──
+                    st.markdown('##### 练习题目')
+                    # 计算本大题在本 section 内的全局题号起始值
+                    start_num = sum(len(groups[g].get('questions', [])) for g in range(grp_i)) + 1
+                    for q_i, q in enumerate(grp.get('questions', [])):
+                        _render_question(lec_i, sec_i, grp_i, q_i, q, grp, start_num + q_i)
 
-                    # ── 链接材料 ──
-                    q['linked_material'] = st.text_area(
-                        '链接材料（可留空）', value=q.get('linked_material', ''),
-                        height=60, key=f'qlink_{lec_i}_{sec_i}_{q_i}')
+                    if st.button('➕ 添加题目', key=f'add_q_{lec_i}_{sec_i}_{grp_i}'):
+                        grp['questions'].append(_new_question())
+                        st.rerun()
 
-                    # ── 答题提示 ──
-                    hint_col, btn_col = st.columns([5, 1])
-                    with hint_col:
-                        q['hint'] = st.text_area(
-                            '答题提示（AI 自动生成）',
-                            value=q.get('hint', ''),
-                            height=68,
-                            key=f'qhint_{lec_i}_{sec_i}_{q_i}')
-                    with btn_col:
-                        st.markdown('<div style="margin-top:28px"></div>', unsafe_allow_html=True)
-                        if st.button('✨ 生成', key=f'gen_hint_{lec_i}_{sec_i}_{q_i}'):
-                            _err = None
-                            with st.spinner('生成中…'):
-                                try:
-                                    generated = _generate_hint(
-                                        sec.get('articles', []),
-                                        q.get('text', ''))
-                                    q['hint'] = generated
-                                    st.session_state[f'qhint_{lec_i}_{sec_i}_{q_i}'] = generated
-                                except Exception as e:
-                                    _err = e
-                            if _err:
-                                st.error(f'生成失败：{_err}')
-                            else:
-                                st.rerun()
-
-                    # ── 参考答案 ──
-                    q['answer'] = st.text_area(
-                        '参考答案（将汇总排在文档末尾）',
-                        value=q.get('answer', ''),
-                        height=68,
-                        key=f'qans_{lec_i}_{sec_i}_{q_i}')
-
-                    if len(sec['questions']) > 1:
-                        if st.button('🗑 删除此题',
-                                     key=f'del_q_{lec_i}_{sec_i}_{q_i}'):
-                            sec['questions'].pop(q_i)
+                    if len(groups) > 1:
+                        st.markdown('---')
+                        if st.button('🗑 删除本大题',
+                                     key=f'del_grp_{lec_i}_{sec_i}_{grp_i}'):
+                            groups.pop(grp_i)
                             st.rerun()
 
-            if st.button('➕ 添加题目', key=f'add_q_{lec_i}_{sec_i}'):
-                sec['questions'].append(_new_question())
+            if st.button('➕ 添加大题', key=f'add_grp_{lec_i}_{sec_i}'):
+                groups.append(_new_question_group(default_with_article))
                 st.rerun()
 
 
@@ -439,7 +464,7 @@ for lec_i, lec in enumerate(lectures):
 
         elif subject == SUBJECT_BASIC:
             st.info('📝 基础板块：核心方法 + 巩固提升（题目）+ 能力进阶（题目）+ 日积月累（描红）')
-            render_article_question_tabs(lec_i, lec)
+            render_article_question_tabs(lec_i, lec, default_with_article=False)
             st.divider()
             render_daily_words(lec_i, lec)
 
