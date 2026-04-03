@@ -351,6 +351,25 @@ def render_daily_words(lec_i, lec):
 # 主界面
 # ══════════════════════════════════════════════════════════════
 
+def _check_password():
+    if st.session_state.get('authenticated'):
+        return True
+    pwd = st.secrets.get('APP_PASSWORD', '')
+    if not pwd:
+        return True  # 未设置密码时直接放行
+    st.title('📚 语文练习册生成器')
+    entered = st.text_input('请输入访问密码', type='password', key='pwd_input')
+    if st.button('进入'):
+        if entered == pwd:
+            st.session_state['authenticated'] = True
+            st.rerun()
+        else:
+            st.error('密码错误，请重试')
+    return False
+
+if not _check_password():
+    st.stop()
+
 st.title('📚 语文练习册生成器')
 st.caption('根据样章格式自动生成 Word 练习册，支持现代文阅读 / 作文 / 基础 / 文言文 / 名著 / 诗词')
 
